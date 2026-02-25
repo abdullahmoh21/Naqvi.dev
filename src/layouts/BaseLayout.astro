@@ -1,0 +1,73 @@
+---
+import "../styles/design-system.css";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+
+type Props = {
+  title: string;
+  description?: string;
+  canonicalUrl?: string;
+};
+
+const { title, description, canonicalUrl } = Astro.props;
+const pageTitle = title ? `${title} — Naqvi.dev` : "Naqvi.dev";
+const canonical = canonicalUrl ?? Astro.url.href;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{pageTitle}</title>
+    {description ? <meta name="description" content={description} /> : null}
+    <link rel="canonical" href={canonical} />
+    <meta name="theme-color" content="#f7f3e9" />
+    <script is:inline>
+      (function () {
+        if (typeof window === "undefined") return;
+        const stored = window.localStorage.getItem("theme");
+        const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        const theme =
+          stored === "light" || stored === "dark"
+            ? stored
+            : prefersDark
+            ? "dark"
+            : "light";
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+    <slot name="head" />
+  </head>
+  <body>
+    <div class="layout-shell">
+      <div class="reading-column">
+        <Header currentPath={Astro.url.pathname} />
+        <main>
+          <slot />
+        </main>
+        <Footer />
+      </div>
+    </div>
+    <script is:inline>
+      (function () {
+        if (typeof window === "undefined") return;
+        const root = document.documentElement;
+
+        function toggleTheme() {
+          const current = root.dataset.theme === "dark" ? "dark" : "light";
+          const next = current === "dark" ? "light" : "dark";
+          root.dataset.theme = next;
+          window.localStorage.setItem("theme", next);
+        }
+
+        window.addEventListener("DOMContentLoaded", () => {
+          const btn = document.querySelector("[data-theme-toggle]");
+          if (!btn) return;
+          btn.addEventListener("click", toggleTheme);
+        });
+      })();
+    </script>
+  </body>
+</html>
+

@@ -1,0 +1,71 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import { getCollection } from "astro:content";
+
+const selectedProjects = (
+  await getCollection("projects", ({ data }) => !data.draft)
+)
+  .sort((a, b) => b.data.publishedAt.getTime() - a.data.publishedAt.getTime())
+  .slice(0, 3);
+
+const recentPosts = (await getCollection("posts", ({ data }) => !data.draft))
+  .sort((a, b) => b.data.publishedAt.getTime() - a.data.publishedAt.getTime())
+  .slice(0, 5);
+---
+
+<BaseLayout
+  title="Home"
+  description="Notebook of Abdullah Mohsin Naqvi — essays, project logs, and experiments in developer tools."
+>
+  <section class="prose" aria-labelledby="home-heading">
+    <header>
+      <h1 id="home-heading">Abdullah Mohsin Naqvi</h1>
+    </header>
+    <p>
+      I’m a computer science student building thoughtful developer tools, small systems,
+      and language experiments. This site is my notebook for documenting what I build,
+      what breaks, and what I learn while fixing it.
+    </p>
+
+    <h2>Selected Work</h2>
+    {selectedProjects.length === 0 ? (
+      <p>No projects yet.</p>
+    ) : (
+      <ul>
+        {selectedProjects.map((project) => (
+          <li>
+            <a href={`/projects/${project.slug}`}>{project.data.title}</a>
+            <p>{project.data.description}</p>
+          </li>
+        ))}
+      </ul>
+    )}
+
+    <h2>Recent Writing</h2>
+    {recentPosts.length === 0 ? (
+      <p>No posts yet.</p>
+    ) : (
+      <ul>
+        {recentPosts.map((post) => (
+          <li>
+            <a href={`/blog/${post.slug}`}>{post.data.title}</a>
+            <span class="meta">
+              {post.data.publishedAt.toLocaleDateString("en-US", {
+                year: "numeric",
+                month: "short",
+                day: "2-digit",
+              })}
+            </span>
+          </li>
+        ))}
+      </ul>
+    )}
+
+    <h2>Now</h2>
+    <p>
+      Currently focused on building small language tooling and writing clear technical
+      notes that are useful to future me.
+    </p>
+  </section>
+</BaseLayout>
+

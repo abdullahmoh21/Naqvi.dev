@@ -1,0 +1,31 @@
+---
+const { currentPath = '' } = Astro.props;
+
+const isActive = (href) => {
+  if (href === '/') return currentPath === '/';
+  return currentPath.startsWith(href);
+};
+---
+
+<header class="site-header">
+  <div class="site-header-row">
+    <div class="site-header-main">
+      <div class="site-title">Naqvi.dev</div>
+      <nav class="site-nav" aria-label="Primary">
+        <a href="/" aria-current={isActive('/') ? 'page' : undefined}>Home</a>
+        <a href="/blog" aria-current={isActive('/blog') ? 'page' : undefined}>Blog</a>
+        <a href="/projects" aria-current={isActive('/projects') ? 'page' : undefined}>Projects</a>
+      </nav>
+    </div>
+    <button
+      type="button"
+      class="theme-toggle"
+      data-theme-toggle
+      aria-label="Toggle color theme"
+    >
+      <span class="theme-toggle-track">
+        <span class="theme-toggle-thumb" />
+      </span>
+    </button>
+  </div>
+</header>

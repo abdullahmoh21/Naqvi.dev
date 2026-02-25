@@ -1,0 +1,41 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import { getCollection } from "astro:content";
+
+export async function getStaticPaths() {
+  const projects = await getCollection("projects", ({ data }) => !data.draft);
+
+  return projects.map((project) => ({
+    params: { slug: project.slug },
+    props: { project },
+  }));
+}
+
+const { project } = Astro.props;
+const { Content } = await project.render();
+---
+
+<BaseLayout title={project.data.title} description={project.data.description}>
+  <article class="prose">
+    <header>
+      <p class="meta">
+        {project.data.publishedAt.toLocaleDateString("en-US", {
+          year: "numeric",
+          month: "short",
+          day: "2-digit",
+        })}
+        {project.data.status ? ` · ${project.data.status}` : ""}
+      </p>
+      <h1>{project.data.title}</h1>
+      {project.data.repoUrl && (
+        <p class="meta">
+          Repository:{" "}
+          <a href={project.data.repoUrl}>{project.data.repoUrl}</a>
+        </p>
+      )}
+    </header>
+
+    <Content />
+  </article>
+</BaseLayout>
+

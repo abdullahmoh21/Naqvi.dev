@@ -1,0 +1,129 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+---
+
+<BaseLayout
+  title="Typography Sandbox"
+  description="Preview of the editorial type system: headings, lists, code, tables, and footnotes."
+>
+  <article class="prose">
+    <header>
+      <p class="meta">Sandbox</p>
+      <h1>Typography sandbox</h1>
+      <p>
+        A quick tour of the type system used across the site. This page is intentionally
+        dense so that edge cases show up early.
+      </p>
+    </header>
+
+    <h2>Headings</h2>
+    <p>
+      Headings use a sans‑serif with slightly increased letter‑spacing. Body text remains
+      in a book‑like serif.
+    </p>
+
+    <h1>H1 — Quiet notebook heading</h1>
+    <p>Short supporting text under an H1.</p>
+
+    <h2>H2 — Section heading</h2>
+    <p>Used for major sections inside an essay or project log.</p>
+
+    <h3>H3 — Sub‑section</h3>
+    <p>Used for finer structure within a section.</p>
+
+    <h4>H4 — Minor heading</h4>
+    <p>Generally reserved for small structural labels.</p>
+
+    <h5>H5 — Label heading</h5>
+    <p>Uppercase with tracking, used sparingly.</p>
+
+    <h6>H6 — Quiet note</h6>
+    <p>The softest tier in the hierarchy.</p>
+
+    <h2>Lists</h2>
+    <p>An unordered list:</p>
+    <ul>
+      <li>One line item.</li>
+      <li>Another item with a little more text to test wrapping.</li>
+      <li>A final item.</li>
+    </ul>
+
+    <p>An ordered list:</p>
+    <ol>
+      <li>First step.</li>
+      <li>Second step with more detail.</li>
+      <li>Third step.</li>
+    </ol>
+
+    <h2>Blockquote</h2>
+    <blockquote>
+      <p>
+        A quiet interface emphasizes the text, not the chrome. The goal is to make the
+        margin useful without making it loud.
+      </p>
+    </blockquote>
+
+    <h2>Links and code</h2>
+    <p>
+      This sentence contains a
+      <a href="https://example.com">sample inline link</a>
+      and some inline code such as
+      <code>const value = compute()</code>
+      inside the flow of text.
+    </p>
+
+    <pre><code class="language-ts">type Entry = &#123;
+  id: string;
+  createdAt: Date;
+  tags: string[];
+&#125;;
+
+function selectRecent(entries: Entry[], limit = 5): Entry[] &#123;
+  return [...entries]
+    .sort((a, b) =&gt; b.createdAt.getTime() - a.createdAt.getTime())
+    .slice(0, limit);
+&#125;</code></pre>
+
+    <h2>Tables</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Layer</th>
+          <th>Purpose</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Ink</td>
+          <td>Primary text color and strong headings.</td>
+        </tr>
+        <tr>
+          <td>Surface</td>
+          <td>Cards, callouts, and subtle separation from the page background.</td>
+        </tr>
+        <tr>
+          <td>Accent</td>
+          <td>Links, emphasis, and progress indicators.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Footnotes</h2>
+    <p>
+      Sometimes a sentence needs a side‑note that would distract from the main flow of
+      reading.<sup id="fnref:demo"><a href="#fn:demo">1</a></sup>
+    </p>
+
+    <section class="footnotes" aria-label="Footnotes">
+      <h2 class="visually-hidden">Footnotes</h2>
+      <ol>
+        <li id="fn:demo">
+          This is a sample footnote, long enough to wrap and show how multi‑line notes
+          behave in the margin of the page.
+          <a href="#fnref:demo" aria-label="Back to content">↩</a>
+        </li>
+      </ol>
+    </section>
+  </article>
+</BaseLayout>
+

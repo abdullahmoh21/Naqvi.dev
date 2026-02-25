@@ -1,0 +1,46 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import { getCollection } from "astro:content";
+
+const projects = (
+  await getCollection("projects", ({ data }) => !data.draft)
+).sort((a, b) => b.data.publishedAt.getTime() - a.data.publishedAt.getTime());
+---
+
+<BaseLayout
+  title="Projects"
+  description="Project essays and build logs by Abdullah Mohsin Naqvi."
+>
+  <section class="prose" aria-labelledby="projects-heading">
+    <header>
+      <h1 id="projects-heading">Projects</h1>
+      <p>
+        Instead of glossy case studies, these are essays about how things were actually
+        built: experiments, design trade‑offs, and the occasional dead end worth keeping.
+      </p>
+    </header>
+
+    {projects.length === 0 ? (
+      <p>No project essays yet.</p>
+    ) : (
+      <ul>
+        {projects.map((project) => (
+          <li>
+            <a href={`/projects/${project.slug}`}>{project.data.title}</a>
+            <br />
+            <span class="meta">
+              {project.data.publishedAt.toLocaleDateString("en-US", {
+                year: "numeric",
+                month: "short",
+                day: "2-digit",
+              })}
+              {project.data.status ? ` · ${project.data.status}` : ""}
+            </span>
+            <p>{project.data.description}</p>
+          </li>
+        ))}
+      </ul>
+    )}
+  </section>
+</BaseLayout>
+
