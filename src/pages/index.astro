@@ -55,18 +55,20 @@ const recentPosts = (await getCollection("posts", ({ data }) => !data.draft))
     {recentPosts.length === 0 ? (
       <p>No posts yet.</p>
     ) : (
-      <ul>
+      <ul class="home-post-list">
         {recentPosts.map((post) => (
-          <li>
-            <a href={`/blog/${getEntrySlug(post)}`}>{post.data.title}</a>
-            <p>{post.data.description}</p>
-            <div class="meta">
+          <li class="home-post-row">
+            <a class="home-post-title" href={`/blog/${getEntrySlug(post)}`}>
+              {post.data.title}
+            </a>
+            <p class="home-post-excerpt">{post.data.description}</p>
+            <time class="meta home-post-date" datetime={post.data.publishedAt.toISOString()}>
               Published {post.data.publishedAt.toLocaleDateString("en-US", {
                 year: "numeric",
                 month: "short",
                 day: "2-digit",
               })}
-            </div>
+            </time>
           </li>
         ))}
       </ul>

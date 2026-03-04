@@ -17,9 +17,9 @@ const { headings, title = "On this page" } = Astro.props;
   class="toc-sidebar"
   aria-label="Table of contents"
   data-toc
-  data-collapsed="false"
+  data-collapsed="true"
 >
-  <button class="toc-toggle" type="button" data-toc-toggle aria-expanded="true">
+  <button class="toc-toggle" type="button" data-toc-toggle aria-expanded="false">
     <span class="toc-title">{title}</span>
     <span class="toc-toggle-icon" aria-hidden="true">
       <svg viewBox="0 0 24 24" focusable="false">

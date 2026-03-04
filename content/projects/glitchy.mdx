@@ -9,25 +9,25 @@ repoUrl: "https://github.com/abdullahmoh21/glitchy-compiler"
 
 ## Why I Built a Programming Language
 
-Like most of my projects, the reason I started was embarrassingly simple: I realized I didn’t actually know what a “programming language” was.
+Like most of my projects, the reason I started was simple: I realized I didn’t actually know what a “programming language” was.
 
 I could write Python, Java, and C++ code just fine, but the whole pipeline behind it felt like black magic. People would say “compiler” and “language” like they were interchangeable, and I nodded along like a functioning adult. Under the hood, I had no intuition for what turns text into something a machine can run.
 
-So I gave myself a goal that was intentionally small and honest: if I could build something that demystified compilers for me, I’d call it a win. Glitchy is the result.
+So I gave myself a goal that was intentionally small: if I could build something that demystified compilers for me, I’d call it a win. Glitchy is the result.
 
 ## Designing Glitchy
 
 I wanted Glitchy to feel like the smallest “real” language I could build without it turning into a toy. That meant:
 
 - Variables, branching, loops, and functions.
-- A syntax simple enough that I could focus on the compiler, not the language lawyering.
+- A syntax simple enough that I could focus on the compiler
 - A compiler pipeline that is readable, with logs that let you see your program move through stages.
 
-The educational part mattered a lot. I didn’t want a compiler that worked only if you squinted at it. I wanted something a curious student (including future me) could actually trace. If your compiler is a black box, it teaches you the same thing your existing languages already taught you: nothing.
+The educational part mattered a lot. I didn’t want a compiler that worked only if you squinted at it. I wanted something a curious student (including future me) could actually trace. A million-line compiler is not something you can understand in an afternoon.
 
 I also originally wanted Glitchy to be dynamically typed.
 
-That desire did not survive contact with reality.
+That desire did not survive for long.
 
 ## What Glitchy Looks Like
 
@@ -43,7 +43,7 @@ n = n - 1
 
 print("factorial = " + fact)  
 ```
-For the full syntax and more examples, see the README.
+For the full syntax and more examples, see the [README](https://github.com/abdullahmoh21/glitchy-compiler/blob/main/README.md).
 
 ## Why Python
 
@@ -57,7 +57,7 @@ At the time, I also thought: “If my language is dynamically typed, implementin
 
 This was optimistic.
 
-Still, I don’t regret it. Python is readable, and that mattered more than micro-optimizations. Glitchy was built to be understood, not to win benchmark competitions that nobody is running.
+Still, I don’t regret it. Python is readable, and that mattered more to me than having a fast compiler. Glitchy was built to be understood, not to win benchmark competitions that nobody is running.
 
 ## The Compiler Pipeline
 
@@ -69,17 +69,13 @@ Glitchy is a compiled language with a multi-stage pipeline. The basic flow looks
 - **Code generation:** emit LLVM IR.
 - **Compilation + execution:** turn that into something runnable.
 
-I’m intentionally keeping this section high-level because the writeup is supposed to be readable. The important part is that Glitchy is not “interpreting lines of code.” It builds structure first, checks that structure, then generates a lower-level program representation.
-
-That pipeline was the point of the project.
-
-## The Problem That Forced Glitchy to Grow Up
+## A major problem with my initial design
 
 Here’s where my initial plan ran into a wall.
 
 I wanted a dynamically typed language, but I also wanted to target LLVM IR.
 
-If you don’t see the problem yet: LLVM is a statically typed backend. Every value has a type. LLVM wants you to commit.
+If you don’t see the problem yet: LLVM is a statically typed backend. Every value has a static type.
 
 So I tried to make dynamic typing work anyway.
 
@@ -87,7 +83,7 @@ The standard answer is boxing: represent values with a tagged runtime structure 
 
 It’s also very easy to underestimate how much engineering effort it is when you’re building your first compiler.
 
-I tried. I really did. I spent weeks trying to make boxing clean and ergonomic, and I got deep enough into it that I started dreaming in “box, unbox, branch on tag.” At some point I had to admit what was happening: I wasn’t learning “compiler fundamentals” anymore, I was building a runtime system.
+I tried. I really did. I spent weeks trying to make boxing clean and ergonomic, and I got deep enough into it that I started dreaming about it! At some point I had to admit what was happening: I wasn’t learning “compiler fundamentals” anymore, I was building a runtime system.
 
 So I made a tradeoff.
 
@@ -105,15 +101,15 @@ When glitch mode is enabled, the compiler intentionally mutates parts of the pro
 
 It’s not random corruption. It’s structured fault injection designed to make you practice reading behavior and reasoning about code paths. In the process, it forces you to do the thing beginners avoid: actually inspect and understand what the program is doing.
 
-This feature also pushed me to design the compiler in a way where the AST was a real first-class representation. If you can’t confidently manipulate your program structure, you don’t really “own” the compiler.
-
 ## What I Learned
 
-Glitchy taught me more than I expected, mostly because it forced me to stop hand-waving:
+Glitchy taught me more than I expected, mostly because it forced me to get my hands dirty.
 
 - A programming language is not syntax. It’s semantics plus tooling plus a pipeline that enforces rules.
 - Parsing is only the beginning. The real “language” lives in analysis: scopes, symbols, types, and meaning.
 - Backends like LLVM are powerful, but they demand clarity. If your frontend is vague, LLVM will punish you for it.
 - Complexity compounds fast. Features that seem small (“just make it dynamically typed”) can secretly be entire subsystems.
 
-Most importantly: I came out of it with intuition I didn’t have before. I can read about compilers now without feeling like I’m reading mythology.
+Most importantly: I came out of it with intuition I didn’t have before. I know what a compiler is! 
+
+Special Thanks to Robert Nystrom for his wonderful book on the topic: [Crafting Interpreters](https://craftinginterpreters.com/index.html)
