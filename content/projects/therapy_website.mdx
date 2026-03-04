@@ -1,0 +1,193 @@
+---
+title: "A Failure-Tolerant Booking Platform"
+description: "A production booking system for a real client, designed around durability, idempotency, and predictable behavior under dependency failure."
+publishedAt: 2025-08-03
+status: stable
+tags:
+  - systems
+  - reliability
+  - webhook
+repoUrl: "https://github.com/abdullahmoh21/therapy-website"
+deployedAt: "https://fatimanaqvi.com"
+draft: false
+---
+
+I built this platform for a practicing therapist whose booking workflow was fragile and manual. Sessions were scheduled over WhatsApp and then added to Google Calendar by hand. As the practice grew, the system started failing in predictable ways: missed messages, calendar inconsistencies, and double bookings.
+
+The goal was not “build a website.” The goal was to centralize the booking lifecycle and make it reliable:
+
+- Let new clients discover services, pricing, and availability.
+- Let clients book and pay online with minimal friction.
+- Give the admin a single source of truth for users, bookings, payments, and recurring sessions.
+- Keep the system working under real-world failures (integration hiccups, queue stalls, cache outages), not just ideal conditions.
+
+## System invariants
+
+Even though everything is deployed on a single VPS, the system coordinates state across multiple components and third-party APIs that fail independently. To keep that complexity manageable, I designed around a few invariants:
+
+- **MongoDB is the single source of truth** for bookings, users, and payments.
+- **Redis is acceleration only** (cache and queue), never authoritative.
+- **Webhook-driven writes must be idempotent**. Retries should not create duplicate business effects.
+- **External integrations are side effects**, not transactional dependencies.
+- **If MongoDB is unavailable, fail fast** rather than serving partial or inconsistent state.
+
+Everything else in the architecture follows from these constraints.
+
+## Why Calendly 
+
+Calendly was a strong fit for self-serve booking: it already had scheduling UX, webhooks, and calendar syncing. I initially designed the system so user-created bookings flowed through Calendly, while the platform handled identity, payments, and internal bookkeeping.
+
+That decision surfaced a critical problem immediately: **Webhooks prove a booking happened, but not who it should belong to inside my system.**
+
+## Calendly identity verification
+
+### The issue
+
+If I attached bookings to users based on `webhook.email`, two bad cases appear:
+
+- A user can enter another person’s email into Calendly and create a booking that gets linked to the wrong account.
+- If a booking link leaks outside the platform, anyone can schedule and trigger valid webhooks.
+
+Calendly’s HMAC signature verifies the webhook came from Calendly. It does not enforce my platform’s policy: “Only authenticated users can create bookings that persist.”
+
+### The solution
+
+I needed a way to associate Calendly bookings with existing users without trusting anything typed into Calendly’s UI.
+
+I implemented this flow:
+
+- The platform does not expose a static Calendly link.
+- Users click a “Book now” button in my app.
+- The server generates a short-lived, signed scheduling token (JTI) bound to the user/session and appends it to the Calendly URL (via UTM metadata).
+- When Calendly sends a webhook, the handler verifies:
+  - Calendly HMAC signature (source authenticity)
+  - The JTI token (user identity and policy validity)
+
+Outcomes:
+
+- **No valid JTI:** treat the booking as outside-policy, reject it, and guide the user toward the correct flow.
+- **Valid JTI:** attach the booking to the correct internal user record.
+
+This provides identity guarantees that Calendly does not provide out of the box.
+
+### Tradeoffs and limitations
+
+- Booking requires an extra server round-trip to fetch the signed link. I prefetch links to hide most latency, but it’s still a dependency.
+- External users can still trigger webhooks, so webhook handling needs to be hardened and rate-limited where appropriate.
+- Long term, it made it clear that relying on Calendly as the core scheduler was limiting.
+
+## Requirement changes
+
+About a month after deployment, a new requirement surfaced that I should have anticipated: **clients are not always in a place to self-serve.**
+
+Many sessions were recurring (weekly or monthly at the same time), and some clients needed the therapist to schedule on their behalf. Calendly didn’t support admin-scheduled sessions or recurring bookings in the way the practice needed.
+
+This forced a major architectural change: keep Calendly for user-driven bookings, but add a first-class internal booking system for:
+
+- Admin-created one-off bookings
+- System-generated recurring bookings
+- Automated Zoom meeting creation
+- Syncing bookings to Google Calendar
+- Conflict detection across:
+  - Internal bookings
+  - Calendly bookings
+  - Existing Google Calendar events
+
+At that point the platform became a real scheduling system, not just a wrapper around Calendly.
+
+## Idempotency 
+
+Webhook delivery is retried. Jobs can be retried. Users double-click buttons. The system assumes duplicates are normal and defends against them at multiple layers:
+
+- **Token layer:** the JTI is single-use. Once consumed, subsequent webhook replays fail validation.
+- **Persistence layer:** booking writes are protected by database constraints to prevent duplicate or conflicting bookings (for example, within a time window for non-cancelled sessions).
+- **Queue layer:** background jobs use deterministic IDs and uniqueness constraints so retried enqueue operations do not create duplicate work.
+
+The goal is simple: even if the same event is processed twice, it should not produce two real-world side effects.
+
+## Durable job processing
+
+Recurring session generation and reminder delivery cannot be “best effort.” If a job responsible for creating upcoming bookings silently fails, the result is not a minor bug. It’s a missed session for a real client.
+
+### The naïve approach
+
+The system already used BullMQ for email and reminder processing. The simplest extension was to use the same Redis-backed queue for recurring booking generation.
+
+The problem was architectural, not functional:
+
+- Cache and queue were sharing the same Redis instance.
+- Redis eviction under memory pressure is possible, especially on a small VPS.
+
+If cache growth could evict queued jobs, then correctness would depend on cache size. That violates the invariant: **Redis must never be authoritative for business-critical work.**
+
+### The redesign
+
+I separated concerns and layered durability explicitly:
+
+- Two isolated Redis-compatible instances:
+  - one dedicated to caching
+  - one dedicated to queue execution
+- MongoDB-backed job persistence:
+  - every scheduled job is written to MongoDB first
+  - MongoDB becomes the durable backlog of future work
+- A promotion model:
+  - a promoter process scans MongoDB for jobs that need to run soon (for example, within the next 5 to 10 minutes)
+  - only near-term jobs are promoted into Redis for execution
+
+This lets the system hold a large backlog of future recurring jobs without bloating Redis, while Redis remains an execution buffer, not a durability layer.
+
+### Failure behavior
+
+- **Queue Redis down:** booking writes still succeed; jobs remain in MongoDB; the promoter repopulates Redis once it recovers.
+- **MongoDB down:** the system fails fast and blocks requests rather than risking inconsistent state.
+
+## Event-driven cache invalidation
+
+My first cache invalidation approach was manual and resource-based:
+
+```js
+invalidateCache("admin_booking");
+invalidateCache("user_bookings");
+invalidateCache("user_payments");
+```
+This worked until it didn’t. The domain is coupled: admin views often combine bookings, payments, and user info. Missing one invalidation call meant stale UI and confusing workflows.
+
+I migrated to event-based invalidation driven by configuration:
+
+endpoints define TTL, per-user caching rules, and which domain events invalidate them
+
+controllers publish events instead of manually enumerating cache keys
+
+Example rule:
+```js
+"^/api/bookings$": {
+  ttl: 1800,
+  cachePerUser: true,
+  allowQueryParams: ["page", "limit"],
+  invalidateOn: ["booking-created", "booking-updated", "booking-deleted"],
+},
+```
+Controller usage becomes:
+```js
+await invalidateByEvent("user-deleted", { userId });
+```
+This reduced invalidation bugs and made cache behavior predictable as the codebase grew.
+
+## Operational guardrails
+Because the system triggers real-world side effects (bookings, emails, payment actions), it needs basic abuse resistance and dependency awareness:
+- Rate limiting with exponential backoff for user-facing endpoints to slow brute force and repeated abuse attempts.
+- Webhook endpoints are treated differently: they are allowlisted from rate limiting but require strict authenticity checks (HMAC verification) and idempotent handling.
+- Dependency guard: if MongoDB is unavailable at runtime, requests are blocked with 503 rather than serving partial or stale data.
+The goal isn’t perfect security. It’s predictable behavior under common failure and abuse modes.
+
+## What I would redesign today
+If I were starting over, I would not use Calendly as the core booking system. I eventually had to implement internal scheduling anyway to support recurring and admin-driven sessions.
+
+The system is now mature enough that migrating user-driven bookings away from Calendly is a realistic next step, and it would simplify both identity verification and operational complexity.
+
+## Thoughts on complexity
+In hindsight, parts of this system are more complex than the current scale strictly requires. A single-tenant booking platform on one VPS could likely operate safely with a simpler queue model and a shared Redis instance.
+
+However, many of the durability and separation patterns were deliberate. I wanted to understand how to design systems where correctness does not depend on cache state or queue health. Building the Mongo-first job pipeline and isolating cache from execution forced me to reason explicitly about authority, acceleration layers, and failure modes.
+
+For this project’s current scale, a simpler design would likely suffice. But the architectural discipline gained from building it this way was intentional and valuable.

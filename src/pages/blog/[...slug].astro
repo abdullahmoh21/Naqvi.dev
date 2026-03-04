@@ -1,57 +1,98 @@
 ---
 import BaseLayout from "../../layouts/BaseLayout.astro";
-import { getCollection } from "astro:content";
-
-function getReadingTime(text) {
-  const words = text.trim().split(/\s+/).filter(Boolean).length;
-  const minutes = Math.max(1, Math.ceil(words / 200));
-  return `${minutes} min read`;
-}
+import ContentToc from "../../components/ContentToc.astro";
+import { getCollection, render } from "astro:content";
+import { getReadingTime } from "../../utils/readingTime";
+import { getEntrySlug } from "../../utils/contentSlug";
 
 export async function getStaticPaths() {
   const posts = await getCollection("posts", ({ data }) => !data.draft);
 
-  return posts.map((post) => ({
-    params: { slug: post.slug },
-    props: { post },
-  }));
+  return posts.flatMap((post) => {
+    const slug = getEntrySlug(post);
+    if (!slug) return [];
+
+    return [
+      {
+        params: { slug },
+        props: { post },
+      },
+    ];
+  });
 }
 
 const { post } = Astro.props;
-const { Content } = await post.render();
+const { Content, headings } = await render(post);
+const tocHeadings = headings.filter((heading) => heading.depth >= 2 && heading.depth <= 3);
+const hasToc = tocHeadings.length >= 2;
+
+const publishedTime = post.data.publishedAt.toISOString();
+const modifiedTime = (post.data.updatedAt ?? post.data.publishedAt).toISOString();
+
+const articleJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  headline: post.data.title,
+  description: post.data.description,
+  datePublished: publishedTime,
+  dateModified: modifiedTime,
+  author: {
+    "@type": "Person",
+    name: "Abdullah Mohsin Naqvi",
+  },
+  mainEntityOfPage: {
+    "@type": "WebPage",
+    "@id": Astro.url.href,
+  },
+};
 ---
 
-<BaseLayout title={post.data.title} description={post.data.description}>
-  <article class="prose">
-    <header>
-      <p class="meta">
-        {post.data.publishedAt.toLocaleDateString("en-US", {
-          year: "numeric",
-          month: "short",
-          day: "2-digit",
-        })}
-        {" · "}
-        {getReadingTime(post.body)}
-      </p>
-      <h1>{post.data.title}</h1>
-      {post.data.updatedAt && (
-        <p class="meta">
-          Updated{" "}
-          {post.data.updatedAt.toLocaleDateString("en-US", {
-            year: "numeric",
-            month: "short",
-            day: "2-digit",
-          })}
-        </p>
-      )}
-      {post.data.tags && post.data.tags.length > 0 && (
-        <p class="meta">
-          {post.data.tags.join(" · ")}
-        </p>
-      )}
-    </header>
+<BaseLayout
+  title={post.data.title}
+  description={post.data.description}
+  ogType="article"
+  publishedTime={publishedTime}
+  modifiedTime={modifiedTime}
+  jsonLd={articleJsonLd}
+>
+  <div class:list={["content-with-toc", hasToc && "has-content-toc"]}>
+    {hasToc && <ContentToc headings={tocHeadings} />}
 
-    <Content />
-  </article>
+    <article class="prose">
+      <header>
+        <p class="meta">
+          <time datetime={post.data.publishedAt.toISOString()}>
+            {post.data.publishedAt.toLocaleDateString("en-US", {
+              year: "numeric",
+              month: "short",
+              day: "2-digit",
+            })}
+          </time>
+          {" · "}
+          {getReadingTime(post.body)}
+        </p>
+        <h1>{post.data.title}</h1>
+        {post.data.updatedAt && (
+          <p class="meta">
+            Updated {" "}
+            <time datetime={post.data.updatedAt.toISOString()}>
+              {post.data.updatedAt.toLocaleDateString("en-US", {
+                year: "numeric",
+                month: "short",
+                day: "2-digit",
+              })}
+            </time>
+          </p>
+        )}
+        {post.data.tags && post.data.tags.length > 0 && (
+          <p class="meta">
+            {post.data.tags.join(" · ")}
+          </p>
+        )}
+      </header>
+
+      <Content />
+    </article>
+  </div>
 </BaseLayout>
 

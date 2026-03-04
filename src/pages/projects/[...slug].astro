@@ -1,41 +1,66 @@
 ---
 import BaseLayout from "../../layouts/BaseLayout.astro";
-import { getCollection } from "astro:content";
+import ContentToc from "../../components/ContentToc.astro";
+import { getCollection, render } from "astro:content";
+import { getEntrySlug } from "../../utils/contentSlug";
 
 export async function getStaticPaths() {
   const projects = await getCollection("projects", ({ data }) => !data.draft);
 
-  return projects.map((project) => ({
-    params: { slug: project.slug },
-    props: { project },
-  }));
+  return projects.flatMap((project) => {
+    const slug = getEntrySlug(project);
+    if (!slug) return [];
+
+    return [
+      {
+        params: { slug },
+        props: { project },
+      },
+    ];
+  });
 }
 
 const { project } = Astro.props;
-const { Content } = await project.render();
+const { Content, headings } = await render(project);
+const tocHeadings = headings.filter((heading) => heading.depth >= 2 && heading.depth <= 3);
+const hasToc = tocHeadings.length >= 2;
 ---
 
 <BaseLayout title={project.data.title} description={project.data.description}>
-  <article class="prose">
-    <header>
-      <p class="meta">
-        {project.data.publishedAt.toLocaleDateString("en-US", {
-          year: "numeric",
-          month: "short",
-          day: "2-digit",
-        })}
-        {project.data.status ? ` · ${project.data.status}` : ""}
-      </p>
-      <h1>{project.data.title}</h1>
-      {project.data.repoUrl && (
-        <p class="meta">
-          Repository:{" "}
-          <a href={project.data.repoUrl}>{project.data.repoUrl}</a>
-        </p>
-      )}
-    </header>
+  <div class:list={["content-with-toc", hasToc && "has-content-toc"]}>
+    {hasToc && <ContentToc headings={tocHeadings} />}
 
-    <Content />
-  </article>
+    <article class="prose">
+      <header>
+        <p class="meta">
+          {project.data.publishedAt.toLocaleDateString("en-US", {
+            year: "numeric",
+            month: "short",
+            day: "2-digit",
+          })}
+          {project.data.status ? ` · ${project.data.status}` : ""}
+        </p>
+        <h1>{project.data.title}</h1>
+        {(project.data.repoUrl || project.data.deployedAt) && (
+          <div class="project-meta-links">
+            {project.data.repoUrl && (
+              <p class="meta">
+                Repository:{" "}
+                <a href={project.data.repoUrl}>{project.data.repoUrl}</a>
+              </p>
+            )}
+            {project.data.deployedAt && (
+              <p class="meta">
+                Deployed at:{" "}
+                <a href={project.data.deployedAt}>{project.data.deployedAt}</a>
+              </p>
+            )}
+          </div>
+        )}
+      </header>
+
+      <Content />
+    </article>
+  </div>
 </BaseLayout>
 

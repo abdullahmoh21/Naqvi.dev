@@ -1,0 +1,69 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+---
+
+<BaseLayout
+  title="404"
+  description="The page you were looking for does not exist."
+>
+  <section class="prose not-found" aria-labelledby="not-found-heading">
+    <header>
+      <h1 id="not-found-heading">404</h1>
+      <h2 class="not-found-subtitle">This page violated an invariant.</h2>
+    </header>
+
+    <p>
+      Strong guarantees were promised.<br />
+      This was not one of them.
+    </p>
+
+    <p>
+      <a class="not-found-home" href="/">Go home</a>
+    </p>
+  </section>
+</BaseLayout>
+
+<style>
+  .not-found {
+    margin-top: var(--space-7);
+  }
+
+  .not-found-subtitle {
+    font-size: var(--font-size-h3);
+    color: var(--color-ink-muted);
+    margin-top: 0;
+    margin-bottom: var(--space-5);
+    letter-spacing: 0.02em;
+    font-weight: 500;
+  }
+
+  .not-found-home {
+    display: inline-block;
+    font-family: var(--font-sans);
+    font-size: 0.92rem;
+    letter-spacing: 0.04em;
+    color: var(--color-ink-soft);
+    background: var(--color-surface-soft);
+    border: 1px solid var(--color-border-subtle);
+    padding: 0.45rem 0.75rem;
+    text-decoration: none;
+  }
+
+  .not-found-home:hover {
+    background: var(--color-surface);
+    text-decoration: underline;
+    text-underline-offset: 0.16em;
+    text-decoration-thickness: 0.08em;
+  }
+
+  .not-found-home:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+
+  @media (max-width: 600px) {
+    .not-found {
+      margin-top: var(--space-6);
+    }
+  }
+</style>

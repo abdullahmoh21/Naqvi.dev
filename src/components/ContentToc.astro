@@ -1,0 +1,135 @@
+---
+type TocHeading = {
+  depth: number;
+  slug: string;
+  text: string;
+};
+
+type Props = {
+  headings: TocHeading[];
+  title?: string;
+};
+
+const { headings, title = "On this page" } = Astro.props;
+---
+
+<aside
+  class="toc-sidebar"
+  aria-label="Table of contents"
+  data-toc
+  data-collapsed="false"
+>
+  <button class="toc-toggle" type="button" data-toc-toggle aria-expanded="true">
+    <span class="toc-title">{title}</span>
+    <span class="toc-toggle-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" focusable="false">
+        <polyline points="6 9 12 15 18 9"></polyline>
+      </svg>
+    </span>
+  </button>
+
+  <ol class="toc-list">
+    {headings.map((heading) => (
+      <li class:list={["toc-item", `is-depth-${heading.depth}`]}>
+        <a class="toc-link" href={`#${heading.slug}`} data-toc-link>
+          {heading.text}
+        </a>
+      </li>
+    ))}
+  </ol>
+</aside>
+
+<script is:inline>
+  (() => {
+    if (typeof window === "undefined") return;
+
+    const tocNodes = document.querySelectorAll("[data-toc]");
+
+    tocNodes.forEach((tocNode) => {
+      const toggleButton = tocNode.querySelector("[data-toc-toggle]");
+      const links = Array.from(
+        tocNode.querySelectorAll("a[data-toc-link]")
+      ).filter((node) => node instanceof HTMLAnchorElement);
+
+      if (!(toggleButton instanceof HTMLButtonElement) || !links.length) return;
+
+      const setCollapsed = (collapsed) => {
+        tocNode.dataset.collapsed = collapsed ? "true" : "false";
+        toggleButton.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      };
+
+      toggleButton.addEventListener("click", () => {
+        const isCollapsed = tocNode.dataset.collapsed === "true";
+        setCollapsed(!isCollapsed);
+      });
+
+      const sectionMap = links
+        .map((link) => {
+          const hash = link.hash;
+          if (!hash) return null;
+          const section = document.getElementById(
+            decodeURIComponent(hash.slice(1))
+          );
+          if (!section) return null;
+          return { link, section };
+        })
+        .filter((entry) => entry !== null);
+
+      if (!sectionMap.length) return;
+
+      let activeId = "";
+
+      const setActive = (nextId) => {
+        if (!nextId || nextId === activeId) return;
+        activeId = nextId;
+
+        links.forEach((link) => {
+          const isActive = link.hash === `#${nextId}`;
+          link.dataset.active = isActive ? "true" : "false";
+          if (isActive) {
+            link.setAttribute("aria-current", "location");
+          } else {
+            link.removeAttribute("aria-current");
+          }
+        });
+      };
+
+      setActive(sectionMap[0].section.id);
+
+      const observer = new IntersectionObserver(
+        (entries) => {
+          const visibleEntries = entries
+            .filter((entry) => entry.isIntersecting)
+            .sort(
+              (a, b) =>
+                a.boundingClientRect.top - b.boundingClientRect.top
+            );
+
+          if (visibleEntries.length > 0) {
+            const nextId = visibleEntries[0].target.id;
+            if (nextId) setActive(nextId);
+            return;
+          }
+
+          const passedEntries = entries
+            .filter((entry) => entry.boundingClientRect.top < 0)
+            .sort(
+              (a, b) =>
+                b.boundingClientRect.top - a.boundingClientRect.top
+            );
+
+          if (passedEntries.length > 0) {
+            const nextId = passedEntries[0].target.id;
+            if (nextId) setActive(nextId);
+          }
+        },
+        {
+          rootMargin: "-18% 0px -62% 0px",
+          threshold: [0, 1],
+        }
+      );
+
+      sectionMap.forEach(({ section }) => observer.observe(section));
+    });
+  })();
+</script>

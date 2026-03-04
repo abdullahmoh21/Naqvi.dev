@@ -1,12 +1,8 @@
 ---
 import BaseLayout from "../../layouts/BaseLayout.astro";
 import { getCollection } from "astro:content";
-
-function getReadingTime(text) {
-  const words = text.trim().split(/\s+/).filter(Boolean).length;
-  const minutes = Math.max(1, Math.ceil(words / 200));
-  return `${minutes} min read`;
-}
+import { getReadingTime } from "../../utils/readingTime";
+import { getEntrySlug } from "../../utils/contentSlug";
 
 const posts = (await getCollection("posts", ({ data }) => !data.draft)).sort(
   (a, b) => b.data.publishedAt.getTime() - a.data.publishedAt.getTime(),
@@ -21,8 +17,7 @@ const posts = (await getCollection("posts", ({ data }) => !data.draft)).sort(
     <header>
       <h1 id="blog-heading">Blog</h1>
       <p>
-        Long-form notes on developer tools, programming languages, and the craft of
-        debugging and design. Many entries are living documents and may evolve over time.
+    Notes on building systems and figuring out why they behave the way they do. Some are experiments. Some are deployed. Most are still being figured out.
       </p>
     </header>
 
@@ -32,14 +27,16 @@ const posts = (await getCollection("posts", ({ data }) => !data.draft)).sort(
       <ul>
         {posts.map((post) => (
           <li>
-            <a href={`/blog/${post.slug}`}>{post.data.title}</a>
+            <a href={`/blog/${getEntrySlug(post)}`}>{post.data.title}</a>
             <br />
             <span class="meta">
-              {post.data.publishedAt.toLocaleDateString("en-US", {
-                year: "numeric",
-                month: "short",
-                day: "2-digit",
-              })}
+              <time datetime={post.data.publishedAt.toISOString()}>
+                {post.data.publishedAt.toLocaleDateString("en-US", {
+                  year: "numeric",
+                  month: "short",
+                  day: "2-digit",
+                })}
+              </time>
               {" · "}
               {getReadingTime(post.body)}
             </span>

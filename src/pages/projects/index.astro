@@ -1,6 +1,7 @@
 ---
 import BaseLayout from "../../layouts/BaseLayout.astro";
 import { getCollection } from "astro:content";
+import { getEntrySlug } from "../../utils/contentSlug";
 
 const projects = (
   await getCollection("projects", ({ data }) => !data.draft)
@@ -26,7 +27,7 @@ const projects = (
       <ul>
         {projects.map((project) => (
           <li>
-            <a href={`/projects/${project.slug}`}>{project.data.title}</a>
+            <a href={`/projects/${getEntrySlug(project)}`}>{project.data.title}</a>
             <br />
             <span class="meta">
               {project.data.publishedAt.toLocaleDateString("en-US", {
