@@ -6,8 +6,12 @@ const baseFields = {
   description: z.string(),
   publishedAt: z.date(),
   updatedAt: z.date().optional(),
-  draft: z.boolean().default(false),
   tags: z.array(z.string()).default([]),
+};
+
+const postFields = {
+  ...baseFields,
+  draft: z.boolean().default(false),
 };
 
 const posts = defineCollection({
@@ -15,7 +19,7 @@ const posts = defineCollection({
     base: new URL('../../content/posts', import.meta.url),
     pattern: '**/*.{md,mdx}',
   }),
-  schema: z.object(baseFields),
+  schema: z.object(postFields),
 });
 
 const projects = defineCollection({
@@ -28,9 +32,6 @@ const projects = defineCollection({
     .extend({
       repoUrl: z.string().url().optional(),
       deployedAt: z.string().url().optional(),
-      status: z
-        .enum(['experiment', 'in-progress', 'stable'])
-        .default('experiment'),
     }),
 });
 

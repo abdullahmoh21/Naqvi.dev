@@ -9,8 +9,9 @@ const [nowEntry] = await getCollection("homeNow");
 const nowContent = nowEntry ? await render(nowEntry) : null;
 
 const allProjects = (
-  await getCollection("projects", ({ data }) => !data.draft)
+  await getCollection("projects")
 )
+  .filter((project) => !getEntrySlug(project).startsWith("_"))
   .sort((a, b) => b.data.publishedAt.getTime() - a.data.publishedAt.getTime());
 
 const configuredSelectedProjects = (homeEntry?.data.selectedProjectSlugs ?? [])

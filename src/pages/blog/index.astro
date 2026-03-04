@@ -29,7 +29,7 @@ const posts = (await getCollection("posts", ({ data }) => !data.draft)).sort(
           <li>
             <a href={`/blog/${getEntrySlug(post)}`}>{post.data.title}</a>
             <br />
-            <span class="meta">
+            <span class="meta meta-row meta-row-inline">
               <time datetime={post.data.publishedAt.toISOString()}>
                 {post.data.publishedAt.toLocaleDateString("en-US", {
                   year: "numeric",
@@ -37,8 +37,7 @@ const posts = (await getCollection("posts", ({ data }) => !data.draft)).sort(
                   day: "2-digit",
                 })}
               </time>
-              {" · "}
-              {getReadingTime(post.body)}
+              <span>{getReadingTime(post.body)}</span>
             </span>
             <p>{post.data.description}</p>
           </li>
