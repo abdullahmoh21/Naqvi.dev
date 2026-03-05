@@ -37,6 +37,22 @@ const baseJsonLd = {
   name: "Naqvi.dev",
   url: new URL("/", Astro.site).toString(),
   description: "Notebook of Abdullah Mohsin Naqvi — essays, project logs, and experiments in developer tools.",
+  author: {
+    "@type": "Person",
+    name: "Abdullah Mohsin Naqvi",
+  },
+};
+
+const personJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "Person",
+  name: "Abdullah Mohsin Naqvi",
+  url: new URL("/", Astro.site).toString(),
+  description: "Software engineer and writer. Essays, project logs, and experiments in developer tools at Naqvi.dev.",
+  sameAs: [
+    "https://github.com/abdullahmoh21",
+    "https://www.linkedin.com/in/abdullahmohsin"
+  ],
 };
 
 const pageJsonLd = jsonLd
@@ -45,7 +61,7 @@ const pageJsonLd = jsonLd
     : [jsonLd]
   : [];
 
-const allJsonLd = [baseJsonLd, ...pageJsonLd];
+const allJsonLd = [baseJsonLd, personJsonLd, ...pageJsonLd];
 ---
 
 <!doctype html>
@@ -54,6 +70,8 @@ const allJsonLd = [baseJsonLd, ...pageJsonLd];
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{pageTitle}</title>
+    <link rel="icon" type="image/svg+xml" href="/og/default.svg" />
+    <meta name="author" content="Abdullah Mohsin Naqvi" />
     {description ? <meta name="description" content={description} /> : null}
     <link rel="canonical" href={canonical} />
     <meta property="og:title" content={pageTitle} />
