@@ -88,6 +88,15 @@ const allJsonLd = [baseJsonLd, personJsonLd, ...pageJsonLd];
     {description ? <meta name="twitter:description" content={description} /> : null}
     <meta name="twitter:image" content={socialImage} />
     <meta name="theme-color" content="#f7f3e9" />
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-82C0YMLBNZ"></script>
+    <script is:inline>
+      window.dataLayer = window.dataLayer || [];
+      function gtag() {
+        window.dataLayer.push(arguments);
+      }
+      gtag("js", new Date());
+      gtag("config", "G-82C0YMLBNZ");
+    </script>
     {allJsonLd.map((item) => (
       <script type="application/ld+json" set:html={JSON.stringify(item)} />
     ))}
