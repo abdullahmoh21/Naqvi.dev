@@ -26,7 +26,6 @@ Even though everything is deployed on a single VPS, the system coordinates state
 - **Redis is acceleration only** (cache and queue), never authoritative.
 - **Webhook-driven writes must be idempotent**. Retries should not create duplicate business effects.
 - **External integrations are side effects**, not transactional dependencies.
-- **If MongoDB is unavailable, fail fast** rather than serving partial or inconsistent state.
 
 Everything else in the architecture follows from these constraints.
 
@@ -83,7 +82,7 @@ This forced a major architectural change: keep Calendly for user-driven bookings
 
 - Admin-created one-off bookings
 - System-generated recurring bookings
-- Automated Zoom meeting creation
+- Automated Google Meet creation
 - Syncing bookings to Google Calendar
 - Conflict detection across:
   - Internal bookings
@@ -174,8 +173,6 @@ This reduced invalidation bugs and made cache behavior predictable as the codeba
 Because the system triggers real-world side effects (bookings, emails, payment actions), it needs basic abuse resistance and dependency awareness:
 - Rate limiting with exponential backoff for user-facing endpoints to slow brute force and repeated abuse attempts.
 - Webhook endpoints are treated differently: they are allowlisted from rate limiting but require strict authenticity checks (HMAC verification) and idempotent handling.
-- Dependency guard: if MongoDB is unavailable at runtime, requests are blocked with 503 rather than serving partial or stale data.
-The goal isn’t perfect security. It’s predictable behavior under common failure and abuse modes.
 
 ## What I would redesign today
 If I were starting over, I would not use Calendly as the core booking system. I eventually had to implement internal scheduling anyway to support recurring and admin-driven sessions.
@@ -187,4 +184,4 @@ In hindsight, parts of this system are more complex than the current scale stric
 
 However, many of the durability and separation patterns were deliberate. I wanted to understand how to design systems where correctness does not depend on cache state or queue health. Building the Mongo-first job pipeline and isolating cache from execution forced me to reason explicitly about authority, acceleration layers, and failure modes.
 
-For this project’s current scale, a simpler design would likely suffice. But the architectural discipline gained from building it this way was intentional and valuable.
+For this project’s current scale, a simpler design would likely suffice. But the architectural discipline gained from building it this way was valuable.
