@@ -1,0 +1,89 @@
+---
+title: "Why Am I Even Making This Syscall?"
+description: "Optimizing a Redis clone in C, one deleted syscall at a time"
+publishedAt: 2026-04-07
+draft: false
+tags:
+  - c
+  - systems-programming
+  - performance
+  - redis
+---
+
+I've always wanted to learn C, but it always seemed too complicated. Over my years of coding I've noticed a pattern: there are things in the back of my mind that bug me, things I know the ideal version of me would understand, but that also scare me enough that I keep pushing them back. "I'll learn it later." "Do I even need this?" "I know enough already." For a very long time, C was exactly this.
+
+I first came across its brother C++ as a teenager building Arduino-powered smart lights. I was 15, I hadn't spent much time programming, and I had real difficulty translating what I wanted into code. I gave up on a lot of those early IoT projects and pegged the problem as "C++ is too low-level for me." Fast forward through a CS degree and countless projects, and I realise that was never the case. I just didn't have the fundamental knowledge: how computers manage memory, how to decompose problems, how to write code that tackles them. But that early fear stuck around and kept me reaching for Python or Java whenever I had a choice.
+
+Eventually, after building things I genuinely thought I wasn't capable of (see [Glitchy](https://naqvi.dev/projects/glitchy)), I decided to give C another shot. I remember plugging Redis into my [booking platform](https://naqvi.dev/projects/therapy-booking-platform) and being blown away by the response-time drop from a simple caching layer. How was it so fast? I decided to answer that question and deal with my fear of low-level languages in one shot: build an in-memory key-value database like Redis, in C, from scratch.
+
+Two restrictions: no AI, no external dependencies. (I promise I am not the "AI hater bro." Read [my intro post](https://naqvi.dev/blog/intro) for more context on that.)
+
+After a month submerged in man pages and Redis's own source code (while simultaneously learning how to read C), I ended up with a KV store that speaks RESP over plain TCP: single-threaded, non-blocking event loop, a hash table behind GET/SET, a skip list for sorted-set commands like ZADD, and an append-only file that compacts in a forked child process. This post is about what happened when I pointed a benchmark at it.
+
+
+
+## The initial numbers were humbling
+
+I benchmarked SET, GET, and ZADD against Redis using `redis-benchmark` with 50 concurrent connections, a pipeline depth of 16, 64-byte payloads, and 1M requests per command. Before any optimization work:
+
+| Command | dist-KV | Redis | vs Redis |
+|---------|---------|-------|----------|
+| SET | 40,752 req/s | 923,361 req/s | -96% |
+| GET | 25,438 req/s | 1,100,110 req/s | -98% |
+| ZADD | 14,263 req/s | 445,235 req/s | -97% |
+
+The server worked. It spoke the protocol correctly, clients could connect and get responses. But it was losing to Redis by an order of magnitude on every command. What surprised me most was that GET was somehow slower than SET. A read path being slower than a write path points to something going very wrong.
+
+The cause did not take long to find. While writing the initial server I had kept it listening in a simple `recv` loop. No I/O multiplexing at all. After implementing an OS-agnostic event loop (`epoll` on Linux, `kqueue` on macOS), I reran the benchmark:
+
+| Command | dist-KV | Redis | vs Redis |
+|---------|---------|-------|----------|
+| SET | 454,752 req/s | 923,361 req/s | -51% |
+| GET | 287,438 req/s | 1,100,110 req/s | -74% |
+| ZADD | 233,263 req/s | 445,235 req/s | -48% |
+
+Much better, although this is probably where I should have started.
+
+## Round 1: A useless buffer
+
+My server was sending responses one at a time. I added a per-client output buffer that would grow dynamically and flush once with a single `send()` call. This should have done wonders, but the benchmark numbers barely moved.
+
+After spending way more time than I should have investigating, I found the problem: I was flushing the buffer and updating the client's event mask (the bitmask that tells `epoll`/`kqueue` which I/O events to watch for on that file descriptor) *inside* the command dispatch loop. The buffer was grabbing one response, firing it off immediately, and starting fresh for the next command. I was effectively spamming fifty `send()` and `epoll_ctl` syscalls per batch instead of just one each. I had written an output buffer, only to use it like a raw `send()`.
+
+The fix was embarrassingly simple: move both calls outside the loop. Process the whole batch first, flush once, then check the event mask. For 50 pipelined commands, that's 50 `dispatch_command` calls filling the buffer followed by a single `send()`.
+
+Two more fixes followed. First, the reply writer was doing a hashmap lookup on every write just to find the client state. My GET response writer was calling _sendRaw three times (header, data, CRLF), so I was paying a three-lookup tax per command. Because the server is single-threaded, there's only ever one active client at a time, so I replaced the lookups with a `current_client` pointer set before dispatch and cleared after: zero lookups on the hot path. Second, I was calling epoll_ctl to update the event mask after every command regardless of whether it had changed. Adding a cached `event_mask` field to the client struct let me skip the syscall entirely when the mask already matched, which in the common case (small responses, no backpressure) is almost always.
+
+| Command | dist-KV | Redis | vs Redis |
+|---------|---------|-------|----------|
+| SET | 1,082,251 req/s (+138%) | 923,361 req/s | **+17%** |
+| GET | 845,308 req/s (+194%) | 1,100,110 req/s | -23% |
+| ZADD | 322,164 req/s (+38%) | 445,235 req/s | -28% |
+
+My SET beat Redis! Shifting two function calls outside a `while` loop was the single most impactful change of the entire project. Most of my gains had come not from doing the work faster, but from not doing the work at all.
+
+## Round 2: closing the GET gap
+
+GET was still 23% behind, and the reason was structural. Every GET formatted its response header with:`snprintf(hdr, 32, "$%zu\r\n", data_len)`. At 845K calls per second, that's 845K format-string parses with locale handling. SET doesn't pay this cost because its response is a compile-time constant `"+OK\r\n"`. I wrote a small helper function that builds the RESP header directly using a two-digit lookup table: roughly five instructions, no locale, no format parsing.
+
+GET was also making three separate `_sendRaw` calls per response (header, value, CRLF) while SET made one. Each call walked the full reply-writer chain. For values up to 4KB, I collapsed all three into a single stack buffer and one `_sendRaw` call.
+
+For ZADD, I asked Claude to look at the code path for bottlenecks, and it flagged `strtod` as a likely hotspot — parsing scores through a general-purpose float converter on every command. I replaced it with a tiered helper: integer scores (the common case) get just sign detection, digit accumulation, and a cast. Decimals with 15 or fewer significant digits hit a second tier using a precomputed pow10 table. The full `strtod` only fires for scientific notation or very long decimals, which rarely show up in real ZADD traffic.
+
+I ran the benchmark again:
+
+| Command | dist-KV | Redis | vs Redis |
+|---------|---------|-------|----------|
+| SET | 1,114,827 (+3%) | 923,361 | **+21%** |
+| GET | 1,290,322 (+53%) | 1,100,110 | **+17%** |
+| ZADD | 380,662 (+18%) | 445,235 | -15% |
+
+GET went from 23% behind Redis to 17% ahead. The dominant factor was killing `snprintf` and collapsing those three write calls.
+
+## What I actually learned
+
+The recurring theme across both rounds was simple: the real wins came from deleting work, not making it faster. It was never "how do I make this syscall faster?" but "why am I even making this syscall?" I didn't need a faster `snprintf`; I needed to stop calling it. Same with the hashmap lookups. Same with the event mask updates. And the most impactful optimization of the entire project, moving two function calls outside a loop, is almost embarrassing in how simple it was.
+
+Initially I thought beating Redis on throughput would be next to impossible — it's been worked on by serious engineers for almost two decades. But the comparison isn't apples to apples. Redis handles Lua scripting, pub/sub, cluster coordination, ACLs, memory eviction policies, and dozens of data structures. I support three commands. My server can be optimized for exactly the workload it handles; Redis has to be general, and generality comes with overhead. That said, knowing all of this doesn't make it any less fun to watch code I wrote outrun Redis on a benchmark.
+
+There's still a 15% gap between my ZADD and Redis, mostly down to memory locality in the skip list(I think). Redis pulls nodes from pools while mine are scattered `malloc` allocations, which is basically a recipe for cache misses. That's the next structural problem I should tackle, but I really want to move toward replication, and with a working AOF that compacts I think I'm in a good spot to start. I'll write it up once I figure it out.
