@@ -1,0 +1,24 @@
+---
+title: "The Languages I Was Scared Of"
+description: "On learning C, and what the avoidance was actually about."
+publishedAt: 2026-05-10
+draft: false
+tags:
+  - reflection
+  - learning
+  - c
+---
+
+There's a pattern I've noticed in my own learning. There are things in the back of my mind that bug me, things I know some better version of me would understand, that also scare me enough that I keep pushing them back. "I'll learn it later." "Do I even need this?" "I know enough already." C was exactly this.
+
+I first met its brother C++ as a teenager building Arduino-powered smart lights. I was 15, I had barely written any code, and I had real difficulty translating what I wanted into something the compiler would accept. I gave up on a lot of those early IoT projects and pegged the problem as "C++ is too low-level for me." That sentence stuck around for years. It became a small permission slip I'd hand myself every time a C or C++ project showed up: not for me, reach for Python.
+
+Fast forward through a CS degree and a stack of projects, and the diagnosis was obviously wrong. The teenager who couldn't get an Arduino to do what he wanted didn't have a language problem. He had a fundamentals problem. He didn't know how memory worked, how to decompose a problem into something a computer could chew on, how to think in terms of state and side effects. C++ wasn't the issue. The issue was that I was trying to write code before I understood what code was doing.
+
+But the fear had already done its work. Even after the fundamentals were there, the avoidance lingered. I'd notice myself reaching past anything that smelled like pointers, even when I was technically equipped to handle it.
+
+What finally moved me wasn't a clean realization. It was just building things I'd previously thought I couldn't. [Glitchy](/projects/glitchy) was the big one. A working compiler that I wrote by hand, without leaning on AI to do the thinking for me. After that, the shape of what felt possible started shifting. If I could write a recursive descent parser and a semantic analyzer, the gap between me and "person who writes C" was a lot smaller than my teenage self had decided.
+
+The actual catalyst was almost mundane. I had plugged Redis into my [therapy booking platform](/projects/therapy-booking-platform) and watched response times collapse from a simple caching layer. I kept thinking about it. How is this thing so fast? The honest answer was that I didn't really know, and I wasn't going to know until I tried to build something like it. So I did. A month later I had [dist-KV](/projects/dist-kv), a Redis-compatible KV store in C that handles 1.8M+ requests per second and outruns Redis itself by 2-2.4x on the commands I implemented.
+
+The point of writing this is not that I beat my fear of C. The point is that the fear was never really about C. It was about a fifteen-year-old's verdict on what he was capable of, dressed up as a technical opinion and carried forward for years. Most of the things I've been avoiding probably have the same shape. The way out is just to build the thing.

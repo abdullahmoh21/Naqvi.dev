@@ -10,17 +10,9 @@ tags:
   - redis
 ---
 
-I've always wanted to learn C, but it always seemed too complicated. Over my years of coding I've noticed a pattern: there are things in the back of my mind that bug me, things I know the ideal version of me would understand, but that also scare me enough that I keep pushing them back. "I'll learn it later." "Do I even need this?" "I know enough already." For a very long time, C was exactly this.
+A month ago I sat down to build an in-memory key-value store like Redis, in C, from scratch. Two restrictions: no AI, no external dependencies. (More on why I wanted to do this [here](/blog/languages-i-was-scared-of).)
 
-I first came across its brother C++ as a teenager building Arduino-powered smart lights. I was 15, I hadn't spent much time programming, and I had real difficulty translating what I wanted into code. I gave up on a lot of those early IoT projects and pegged the problem as "C++ is too low-level for me." Fast forward through a CS degree and countless projects, and I realise that was never the case. I just didn't have the fundamental knowledge: how computers manage memory, how to decompose problems, how to write code that tackles them. But that early fear stuck around and kept me reaching for Python or Java whenever I had a choice.
-
-Eventually, after building things I genuinely thought I wasn't capable of (see [Glitchy](https://naqvi.dev/projects/glitchy)), I decided to give C another shot. I remember plugging Redis into my [booking platform](https://naqvi.dev/projects/therapy-booking-platform) and being blown away by the response-time drop from a simple caching layer. How was it so fast? I decided to answer that question and deal with my fear of low-level languages in one shot: build an in-memory key-value database like Redis, in C, from scratch.
-
-Two restrictions: no AI, no external dependencies. (I promise I am not the "AI hater bro." Read [my intro post](https://naqvi.dev/blog/intro) for more context on that.)
-
-After a month submerged in man pages and Redis's own source code (while simultaneously learning how to read C), I ended up with a KV store that speaks RESP over plain TCP: single-threaded, non-blocking event loop, a hash table behind GET/SET, a skip list for sorted-set commands like ZADD, and an append-only file that compacts in a forked child process. This post is about what happened when I pointed a benchmark at it.
-
-
+What I ended up with is a KV store that speaks RESP over plain TCP: single-threaded, non-blocking event loop, a hash table behind GET/SET, a skip list for sorted-set commands like ZADD, and an append-only file that compacts in a forked child process. This post is about what happened when I pointed a benchmark at it.
 
 ## The initial numbers were humbling
 
