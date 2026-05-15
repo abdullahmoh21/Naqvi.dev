@@ -2,6 +2,7 @@
 title: "Why Am I Even Making This Syscall?"
 description: "Optimizing a Redis clone in C, one deleted syscall at a time"
 publishedAt: 2026-04-07
+updatedAt: 2026-05-15
 draft: false
 tags:
   - c
@@ -10,9 +11,9 @@ tags:
   - redis
 ---
 
-A month ago I sat down to build an in-memory key-value store like Redis, in C, from scratch. Two restrictions: no AI, no external dependencies. (More on why I wanted to do this [here](/blog/languages-i-was-scared-of).)
+A month ago I sat down to build an in-memory key-value store like Redis, in C, from scratch, with two restrictions: no AI written code, no external dependencies. I wrote about why I wanted to do this [here](/blog/languages-i-was-scared-of).
 
-What I ended up with is a KV store that speaks RESP over plain TCP: single-threaded, non-blocking event loop, a hash table behind GET/SET, a skip list for sorted-set commands like ZADD, and an append-only file that compacts in a forked child process. This post is about what happened when I pointed a benchmark at it.
+What I ended up with is a KV store that speaks RESP over plain TCP: single-threaded, non-blocking event loop, a hash table behind GET/SET, a skip list for sorted-set commands like ZADD, and an append-only file that compacts in a forked child process. This post is about what happened when I pointed a benchmark at it, and it has grown as the project has. I'll keep updating it.
 
 ## The initial numbers were humbling
 
@@ -36,15 +37,15 @@ The cause did not take long to find. While writing the initial server I had kept
 
 Much better, although this is probably where I should have started.
 
-## Round 1: A useless buffer
+## A useless buffer
 
 My server was sending responses one at a time. I added a per-client output buffer that would grow dynamically and flush once with a single `send()` call. This should have done wonders, but the benchmark numbers barely moved.
 
 After spending way more time than I should have investigating, I found the problem: I was flushing the buffer and updating the client's event mask (the bitmask that tells `epoll`/`kqueue` which I/O events to watch for on that file descriptor) *inside* the command dispatch loop. The buffer was grabbing one response, firing it off immediately, and starting fresh for the next command. I was effectively spamming fifty `send()` and `epoll_ctl` syscalls per batch instead of just one each. I had written an output buffer, only to use it like a raw `send()`.
 
-The fix was embarrassingly simple: move both calls outside the loop. Process the whole batch first, flush once, then check the event mask. For 50 pipelined commands, that's 50 `dispatch_command` calls filling the buffer followed by a single `send()`.
+The fix was embarrassingly simple: move both calls outside the loop. Process the whole batch first, flush once, then check the event mask. For 50 pipelined commands, that's 50 dispatches filling the buffer followed by a single `send()`.
 
-Two more fixes followed. First, the reply writer was doing a hashmap lookup on every write just to find the client state. My GET response writer was calling _sendRaw three times (header, data, CRLF), so I was paying a three-lookup tax per command. Because the server is single-threaded, there's only ever one active client at a time, so I replaced the lookups with a `current_client` pointer set before dispatch and cleared after: zero lookups on the hot path. Second, I was calling epoll_ctl to update the event mask after every command regardless of whether it had changed. Adding a cached `event_mask` field to the client struct let me skip the syscall entirely when the mask already matched, which in the common case (small responses, no backpressure) is almost always.
+Two more fixes followed. First, the reply writer was doing a hashmap lookup on every write just to find the client state. My GET response writer was making three separate writes (header, data, CRLF), so I was paying a three-lookup tax per command. Because the server is single-threaded, there's only ever one active client at a time, so I replaced the lookups with a pointer to the current client, set before dispatch and cleared after: zero lookups on the hot path. Second, I was calling `epoll_ctl` to update the event mask after every command regardless of whether it had changed. Caching the current mask on the client struct let me skip the syscall entirely when the new mask matched, which in the common case (small responses, no backpressure) is almost always.
 
 | Command | dist-KV | Redis | vs Redis |
 |---------|---------|-------|----------|
@@ -52,17 +53,15 @@ Two more fixes followed. First, the reply writer was doing a hashmap lookup on e
 | GET | 845,308 req/s (+194%) | 1,100,110 req/s | -23% |
 | ZADD | 322,164 req/s (+38%) | 445,235 req/s | -28% |
 
-My SET beat Redis! Shifting two function calls outside a `while` loop was the single most impactful change of the entire project. Most of my gains had come not from doing the work faster, but from not doing the work at all.
+My SET beat Redis. Shifting two function calls outside a `while` loop was the single most impactful change of the entire project. Most of my gains had come not from doing the work faster, but from not doing the work at all.
 
-## Round 2: closing the GET gap
+## Closing the GET gap
 
-GET was still 23% behind, and the reason was structural. Every GET formatted its response header with:`snprintf(hdr, 32, "$%zu\r\n", data_len)`. At 845K calls per second, that's 845K format-string parses with locale handling. SET doesn't pay this cost because its response is a compile-time constant `"+OK\r\n"`. I wrote a small helper function that builds the RESP header directly using a two-digit lookup table: roughly five instructions, no locale, no format parsing.
+GET was still 23% behind, and the reason was structural. Every GET formatted its response header with `snprintf(hdr, 32, "$%zu\r\n", data_len)`. At 845K calls per second, that's 845K format-string parses with locale handling. SET doesn't pay this cost because its response is a compile-time constant `"+OK\r\n"`. I wrote a small helper that builds the RESP header directly using a two-digit lookup table: roughly five instructions, no locale, no format parsing.
 
-GET was also making three separate `_sendRaw` calls per response (header, value, CRLF) while SET made one. Each call walked the full reply-writer chain. For values up to 4KB, I collapsed all three into a single stack buffer and one `_sendRaw` call.
+GET was also making three separate writes per response (header, value, CRLF) while SET made one. Each one walked the full reply-writer chain. For values up to 4KB, I collapsed all three into a single stack buffer and one write.
 
-For ZADD, I asked Claude to look at the code path for bottlenecks, and it flagged `strtod` as a likely hotspot — parsing scores through a general-purpose float converter on every command. I replaced it with a tiered helper: integer scores (the common case) get just sign detection, digit accumulation, and a cast. Decimals with 15 or fewer significant digits hit a second tier using a precomputed pow10 table. The full `strtod` only fires for scientific notation or very long decimals, which rarely show up in real ZADD traffic.
-
-I ran the benchmark again:
+For ZADD, I asked Claude to look at the code path for bottlenecks, and it flagged `strtod` as a likely hotspot — parsing scores through a general-purpose float converter on every command. I replaced it with a tiered helper: integer scores (the common case) get just sign detection, digit accumulation, and a cast. Decimals with 15 or fewer significant digits hit a second tier using a precomputed `pow10` table. The full `strtod` only fires for scientific notation or very long decimals, which rarely show up in real ZADD traffic.
 
 | Command | dist-KV | Redis | vs Redis |
 |---------|---------|-------|----------|
@@ -72,10 +71,67 @@ I ran the benchmark again:
 
 GET went from 23% behind Redis to 17% ahead. The dominant factor was killing `snprintf` and collapsing those three write calls.
 
+## Smaller wins, accumulated
+
+The next stretch of work didn't have any single dramatic change worth its own section, but the changes added up. The biggest was replacing the client lookup hashmap with an fd-indexed array: 4096 client pointers in BSS, 32KB total, indexed directly by the file descriptor. Every event handler used to do an FNV hash and chain walk to find the client. Replacing it with a single dereference is fifteen lines of code and another large fraction of the syscall budget back.
+
+The hashmap itself learned to cache hashes. Every store operation needs the FNV-1a hash of the key, and several paths needed it more than once: a SET on a new key would look up the bucket and then insert into it, hashing the key twice. I split out the hash computation as its own step and exposed a parallel set of lookup and insert functions that accept a precomputed hash. SET on new keys also got a single-pass "find or insert" primitive: one hash, one chain traversal, handling both the "exists" and "absent" cases together.
+
+On macOS, the kqueue path was doing two syscalls (`delete + re-add`) to change the event mask. Switching to a single `kevent()` call with `EV_ADD | EV_ENABLE` and `EV_ADD | EV_DISABLE` for the read and write filters simultaneously cut that in half.
+
+And `-march=native -flto` in the release build let the compiler inline the hashmap lookup, the write path, and the output-buffer append across translation unit boundaries, and gave the FNV loop and `memcpy` calls AVX2 instructions to use.
+
+None of these individually moved a benchmark by 50%. Together they were the difference between "comfortable margin" and "uncomfortable margin."
+
+## The tail
+
+By this point I had stopped looking at distributions and was just watching the throughput numbers go up. When I finally pulled up the percentile output, the picture was ugly:
+
+| Percentile | dist-KV SET | dist-KV GET |
+|---|---|---|
+| p50 | 0.167ms | 0.183ms |
+| p99 | 0.783ms | 0.463ms |
+| **max** | **7.855ms** | **33.951ms** |
+
+A 33ms outlier on GET when the median was under 200 microseconds. That is the kind of distribution that wins benchmark charts and ruins production. I went looking for the cause.
+
+The SET tail was the AOF thread. After every buffer flush it called `fdatasync()`, which on macOS/APFS could take ~7ms. Meanwhile the 1-second periodic flush was using a blocking buffer swap that waits on a condition variable until the AOF thread is idle. Whenever the timer fired during an active sync, the main event loop blocked for the entire sync duration. The 4KB initial buffer made this worse: at ~70MB/s of writes, it was filling and swapping roughly seventeen thousand times per second, keeping the AOF thread basically continuously syncing.
+
+The GET tail was structurally different. When the compaction child finished, the main event loop ran a force-flush, a merge step that reads the temp AOF, writes the compacted AOF, and calls `fsync`, and a `rename`/`open`/`unlink` sequence — all synchronously, in the main loop, with no clients served. The whole thing took twenty-plus milliseconds, and it landed during GET because that's when SET's compaction completed.
+
+Three changes fixed both:
+
+**`O_DSYNC` on all AOF file opens.** With `O_DSYNC` the `write()` call itself is the sync. There is no separate barrier, no APFS journal commit waiting to land at unpredictable times. The explicit `fdatasync` in the AOF thread and the `fsync` in the merge step both go away. Stall time becomes proportional to bytes-written-divided-by-disk-bandwidth instead of "however long the kernel decides to take."
+
+**1MB initial AOF buffer, up from 4KB.** Buffer swaps drop from ~17,000 per second to ~70 per second. Each swap is a potential stall point; fewer swaps means far less exposure to the wait path. Total AOF buffer memory is now 2MB (active + standby), which on any modern machine is rounding error.
+
+**Non-blocking periodic flush.** The 1-second periodic flush now tries to swap buffers and skips if the standby is busy. The data gets picked up on the next tick. The blocking variant stays in the failure-recovery path, where correctness requires it.
+
+I re-ran the full benchmark suite against a fresh Redis 7 install on the same machine. The throughput numbers moved more than I expected, and the distributions inverted properly. dist-KV now wins at every percentile up through p99:
+
+| Command | dist-KV | Redis | vs Redis |
+|---------|---------|-------|----------|
+| SET | 1,612,903 req/s | 617,283 req/s | **+161%** |
+| GET | 2,222,222 req/s | 909,090 req/s | **+144%** |
+| ZADD¹ | 724,637 req/s | 497,512 req/s | **+46%** |
+
+| Percentile | SET (dist-KV / Redis) | GET (dist-KV / Redis) | ZADD¹ (dist-KV / Redis) |
+|---|---|---|---|
+| p50 | 0.167ms / 0.415ms | 0.183ms / 0.343ms | 0.855ms / 1.551ms |
+| p95 | 0.231ms / 0.559ms | 0.231ms / 0.495ms | 2.327ms / 1.815ms |
+| p99 | 0.783ms / 0.879ms | 0.463ms / 0.551ms | 3.807ms / 2.023ms |
+| max | 1.951ms / 3.903ms | 0.767ms / 2.327ms | 12.359ms / 3.263ms |
+
+¹ ZADD here uses random keys and a 67-byte payload (`--command "zadd bench:z __rand_int__ m:__rand_int__"`), which is closer to a real sorted-set workload than `redis-benchmark`'s default ZADD pattern.
+
+The ZADD max of 12ms is the one number I'm not happy about, and the cause is clear: stop-the-world hashmap rehashing when the score-index doubles from 524K to 1M buckets. Redis avoids this with progressive rehashing — keeping two tables during a resize and migrating a fixed batch of buckets per operation — and by shipping jemalloc instead of using the system allocator. Both are on the list. SET max and GET max are now both better than Redis on the same hardware.
+
+`O_DSYNC` isn't a faster sync; it's the same sync without a separate barrier in front of it. The 1MB buffer doesn't make swaps faster; it makes them rarer. The non-blocking flush doesn't speed up the flush path; it just stops blocking on it when it isn't necessary. Three more cases of "stop doing the thing" beating "do the thing faster."
+
 ## What I actually learned
 
-The recurring theme across both rounds was simple: the real wins came from deleting work, not making it faster. It was never "how do I make this syscall faster?" but "why am I even making this syscall?" I didn't need a faster `snprintf`; I needed to stop calling it. Same with the hashmap lookups. Same with the event mask updates. And the most impactful optimization of the entire project, moving two function calls outside a loop, is almost embarrassing in how simple it was.
+The recurring theme across all of this was simple: the real wins came from deleting work, not making it faster. It was never "how do I make this syscall faster?" but "why am I even making this syscall?" I didn't need a faster `snprintf`; I needed to stop calling it. Same with the hashmap lookups. Same with the event mask updates. Same with the `fdatasync` in the AOF path. And the most impactful optimization of the entire project, moving two function calls outside a loop, is almost embarrassing in how simple it was.
 
-Initially I thought beating Redis on throughput would be next to impossible — it's been worked on by serious engineers for almost two decades. But the comparison isn't apples to apples. Redis handles Lua scripting, pub/sub, cluster coordination, ACLs, memory eviction policies, and dozens of data structures. I support ten commands. My server can be optimized for exactly the workload it handles; Redis has to be general, and generality comes with overhead. That said, knowing all of this doesn't make it any less fun to watch code I wrote outrun Redis on a benchmark.
+Initially I thought beating Redis on throughput would be next to impossible — it's been worked on by serious engineers for almost two decades. But the comparison isn't apples to apples. Redis handles Lua scripting, pub/sub, cluster coordination, ACLs, and dozens of data structures. I support ten commands. My server can be optimized for exactly the workload it handles; Redis has to be general, and generality comes with overhead. That said, knowing all of this doesn't make it any less fun to watch code I wrote outrun Redis on a benchmark.
 
-There's still a 15% gap between my ZADD and Redis, mostly down to memory locality in the skip list(I think). Redis pulls nodes from pools while mine are scattered `malloc` allocations, which is basically a recipe for cache misses. That's the next structural problem I should tackle, but I really want to move toward replication, and with a working AOF that compacts I think I'm in a good spot to start. I'll write it up once I figure it out.
+The ZADD tail is the obvious next structural problem — progressive rehashing in the hashmap, and probably a slab allocator for hash nodes while I'm in there. But I wanted replication first, and that one's done: full primary/replica with `PSYNC`, a ring-buffer backlog for write propagation, and a working `WAIT`. I wrote that up [here](/projects/dist_kv).

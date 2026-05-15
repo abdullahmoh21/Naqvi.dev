@@ -1,0 +1,114 @@
+---
+title: "dist-KV: A zero-dependency kv store"
+description: "A Redis-compatible key-value server built from scratch in C"
+publishedAt: 2026-05-13
+tags:
+  - systems
+status: in-progress
+repoUrl: "https://github.com/abdullahmoh21/dist-KV"
+---
+
+I started dist-KV because I wanted to spend serious time inside a system where the abstractions stop helping. The motivation, including the no-AI for writing code rule I held myself to, is in [The Languages I Was Scared Of](/blog/fear_of_c). What I want to walk through here is what the system actually looks like: how it's structured, which decisions paid off, and which ones I'd redo.
+
+The current state is roughly seven thousand five hundred lines of C across thirty-five files, zero external dependencies past POSIX, and a feature set that includes the full RESP protocol, a dual-indexed sorted set, fork-based AOF compaction, primary and replica replication with `PSYNC` and `WAIT`, and a cross-platform event loop. On `redis-benchmark` with fifty connections and a pipeline depth of sixteen, dist-KV currently does **1.61M SET/s**, **2.22M GET/s**, and **725K ZADD/s** (random keys, 67-byte payload), all faster than the Redis 7 baseline I ran on the same machine — by [a factor of ~2x](/blog/beating_redis).
+
+## Invariants
+
+Most of the design followed from a small number of constraints I committed to early:
+
+- **The store is single-threaded.** All client reads, command dispatch, and store mutations happen on one thread. No locks on the hashmap or skip list, no cache-line contention, no reasoning about happens-before.
+- **The AOF writer and any compaction fork are the only other moving pieces.** They communicate with the main thread through atomics and a mutex+condvar pair, and nothing else.
+- **No allocations on the hot path.** Per-request work should hit the same set of pre-sized buffers and the stack. `calloc` per command is unacceptable.
+- **One binary, two roles.** A node is a primary unless `--replicaof` is passed at startup. Replicas are not a separate codebase.
+
+Everything below is downstream of these.
+
+## The protocol layer
+
+RESP is a forgiving format on paper and a surprisingly easy place to lose throughput in practice. The parser is streaming: it consumes whatever bytes are in the client input buffer, advances through partial frames, and only commits to dispatch once a full array of bulk strings is in hand. Eight distinct error codes cover the cases that matter, and the parser bails cleanly on each.
+
+The detail that mattered most for performance came from looking at where allocations were happening. The parser was originally calling `calloc` to hold the argv array for each command. At over a million commands per second that was over a million small heap allocations per second, dwarfing the actual store work. The fix was structural: `RedisCommand` embeds an `inline_args[8]` array on the stack, and the heap path is only taken for commands with more than eight arguments. None of the currently implemented commands hit that path. Profiling showed the allocator vanish from the top of the flame graph.
+
+## Data structures
+
+The store is built around a generic hashmap with FNV-1a hashing, separate chaining, and integer expand/shrink thresholds (computed once at create-or-resize time so per-insert load checks are a single integer comparison instead of a floating-point divide). The same hashmap implementation backs the client registry, the main key-value store, and the sorted set's member lookup table.
+
+Sorted sets are dual-indexed. A hashmap gives O(1) lookup by member name (for `ZSCORE`, `ZADD` existence checks, and `ZREM`), and a probabilistic skip list with up to sixteen levels gives O(log N) range queries by score or rank. Both structures point at the same `ZSetMember` objects. The skip list comparator is score-first, then lexicographic member name to keep ties stable, and the iterators are stack-allocatable structs so a `ZRANGE` doesn't malloc.
+
+## The event loop
+
+The event loop interface is platform-agnostic (`event_loop_create`, `event_loop_add`, `event_loop_mod`, `event_loop_del`, `event_loop_wait`), and Makefile-time `uname` detection picks epoll on Linux and kqueue on macOS. No vtables, no runtime dispatch, no function pointers in the inner loop.
+
+Most of the syscall-shaving work that made this loop fast is covered in [Why Am I Even Making This Syscall?](/blog/beating_redis) — the per-batch output flush, the cached event mask, the `current_client` pointer that replaced a per-write hashmap lookup, and the fast RESP header formatter that killed `snprintf` on the GET path. Two things landed after that post that are worth calling out.
+
+The first is `ClientState *fd_clients[4096]`. Client lookup used to be an FNV hash and chain walk against a hashmap keyed by fd. Replacing it with a 32KB BSS array indexed directly by fd turned every client lookup into a single dereference, and the read and write handlers each do one per event. At over a million requests per second that's millions of hashmap lookups per second of pure overhead, gone. It is one of the largest single wins in the history of the project, and it cost about fifteen lines of code.
+
+The second is the macOS kqueue path, which used to do a `delete + re-add` pair when changing the event mask. The current `event_loop_mod` issues a single `kevent()` call with `EV_ADD | EV_ENABLE` and `EV_ADD | EV_DISABLE` for the read and write filters simultaneously. One syscall instead of two, on every event mask change.
+
+## Persistence: AOF and fork-based compaction
+
+The store is in-memory but durable. Every write command is serialized back to RESP and appended to `appendonly.aof`. The main thread does not block on disk.
+
+Writes are double-buffered. The main thread appends to an `active` buffer with no syscall. A background AOF thread holds the `standby` buffer and drains it to disk under a mutex and condition variable. When the active buffer fills, the swap is atomic. If the swap can't happen (because the standby is still draining), the buffer tries to expand, and only if expansion fails does the main thread block on the writer. **The main thread never blocks on disk I/O in the common case.**
+
+Compaction is more interesting. The trigger is dead simple: an `_Atomic uint64_t file_size` counter, updated with `atomic_fetch_add` on every flush, gets checked against `last_compaction_file_size * 2` once per event loop tick. No `stat()` syscall, no mutex on the trigger check.
+
+When compaction fires, the parent calls `fork()`. The child gets a copy-on-write snapshot of the entire store for free. The child then walks the store and writes the minimal RESP command stream that reproduces it into `compacted.aof`. Meanwhile, the parent has already redirected new AOF writes to `tmp.aof` and is back to serving clients. When the child exits successfully, the parent appends the contents of `tmp.aof` to `compacted.aof` and `rename()`s it over the original. If the child fails, `aof_recover_on_compact_fail` glues `tmp.aof` back onto the original file. No writes are lost in either direction.
+
+The detail that took the longest to get right: the child cannot use `malloc`. After `fork()`, only the calling thread survives, but the allocator's internal locks may still be held by threads that no longer exist, and any subsequent `malloc` will deadlock. The compaction child uses `mmap(MAP_ANON | MAP_PRIVATE)` for all its scratch allocation. Similarly, the AOF mutex itself is protected by `pthread_atfork` handlers that lock it pre-fork and unlock it in both parent and child, so the child never inherits a poisoned lock. Hashmap resizing is paused during all fork children via `hm_pause_resize` — a resize during the child's lifetime would copy-on-write every bucket page, blowing up memory usage for no real benefit.
+
+## Replication
+
+A node becomes a replica by being started with `--replicaof <host> <port>`. There is one binary.
+
+The primary tracks each connected replica through a five-state machine: `HANDSHAKE`, `PSYNC_PENDING`, `FULL_SYNC`, `SENDING_SNAPSHOT`, `STREAMING`. When a `PSYNC` arrives, the primary responds with `+FULLRESYNC <repl_id> <offset>` and forks a snapshot child that writes the current store to a per-replica file (e.g. `fullsync_7.aof`) using the same `aof_compact_to_file` machinery as compaction. Once the child exits, the parent streams the snapshot file to the replica socket in 64KB chunks, one chunk per event loop tick, and the replica transitions to `STREAMING`.
+
+After streaming starts, write propagation is the part I am proudest of. Every successful write command on the primary calls `repl_propagate`, which appends the raw RESP bytes to a single 1MB ring buffer (`ReplBacklog`) shared across all replicas. Fan-out is then driven by each replica's writable event: `repl_backlog_drain_replica` reads from the ring at the replica's current offset and `writev`s the bytes to its socket, using scatter I/O if the data wraps the ring boundary. Propagation is O(1) regardless of replica count. A replica that falls behind enough to be lapped by the ring is marked dead and disconnected.
+
+`WAIT <numreplicas> <timeout>` is fully implemented. The primary snapshots its current `repl_offset` at call time, and if not enough replicas have ACK'd that offset, parks a `PendingWait` struct in a 256-slot table. The event loop resolves these every tick. The client is not blocked; the reply is just deferred until either enough replicas ACK or the deadline passes.
+
+If a `PSYNC` arrives while an AOF compaction fork is already running, the replica is queued in `PSYNC_PENDING` and promoted only when `active_forks` drops to zero. This was a deliberate choice to avoid two snapshot-sized forks living in memory at once on a small machine.
+
+## Latency, and the tail
+
+Throughput is the easy number to look at, and the previous post covers how we got there. The more interesting question once throughput stopped being embarrassing was: what does the distribution look like? Specifically, what happens at the tail?
+
+The honest answer when I first measured it was: badly. The median was good. p50 SET was 0.167ms, well under Redis's 0.415ms. But the p99.99 was 7.8ms on SET and 33.9ms on GET, while Redis stayed under a millisecond everywhere. A median win and a tail loss is the kind of result that looks great on a marketing chart and terrible in production.
+
+Both stalls had clear causes once I went looking. The SET tail was the AOF background thread holding the mutex while it `fdatasync`'d, which left the main thread blocked inside `_force_swap_buffers` whenever the 1-second periodic flush timer happened to land on an active sync. The 4KB initial AOF buffer made it worse, because at 70MB/s of writes the buffer was filling and swapping roughly seventeen thousand times per second, keeping the AOF thread continuously syncing and maximizing the chance of a collision.
+
+The GET tail was worse and structurally different. When the compaction child finished, the main event loop ran `aof_force_flush`, `aof_merge_compacted`, and a `rename`/`open`/`unlink` sequence synchronously — pushing the full accumulated AOF buffer through one `fdatasync`, reading and rewriting `tmp.aof`, then waiting on APFS journal commits. The whole thing took twenty-plus milliseconds during which no clients were served, and it landed in the middle of the GET run because that's when SET's compaction finished.
+
+Three changes fixed both:
+
+- **`O_DSYNC` on all AOF file opens.** With `O_DSYNC` the `write()` call itself is the sync. There is no separate barrier, no APFS journal commit waiting to land at unpredictable times. The explicit `fdatasync` in the AOF thread and the `fsync` in `aof_merge_compacted` both go away, and stall time becomes proportional to bytes-written-divided-by-disk-bandwidth instead of "however long the kernel decides to take."
+- **1MB initial AOF buffer.** Up from 4KB. Buffer swaps drop from ~17,000 per second to ~70 per second. Each swap is a potential stall point; fewer swaps means far less exposure to the wait path.
+- **Non-blocking `aof_check_flush`.** The 1-second periodic flush now uses `_try_swap_buffers` and skips the flush if the standby is busy. The data gets picked up on the next tick. The blocking variant stays in the failure-recovery path, where correctness requires it.
+
+After those, the picture inverts. dist-KV beats Redis at every percentile up through p99 on SET, GET, and ZADD, often by close to 2×.
+
+| Percentile | SET dist-KV / Redis | GET dist-KV / Redis | ZADD dist-KV / Redis |
+|---|---|---|---|
+| p50 | 0.167ms / 0.415ms | 0.183ms / 0.343ms | 0.855ms / 1.551ms |
+| p95 | 0.231ms / 0.559ms | 0.231ms / 0.495ms | 2.327ms / 1.815ms |
+| p99 | 0.783ms / 0.879ms | 0.463ms / 0.551ms | 3.807ms / 2.023ms |
+
+The remaining honesty: the absolute max is still worse on dist-KV than on Redis. ZADD goes out to ~12ms at the top, mostly because of stop-the-world hashmap rehashes when the score-index hashmap doubles from 524K to 1M buckets. Redis avoids this with progressive rehashing — keeping two tables during a resize and migrating a fixed batch of buckets per operation — and shipping jemalloc instead of the system allocator. Both are on the list.
+
+## What I would redesign today
+
+Three things, roughly in order of how much they bother me.
+
+**Incremental rehashing.** The stop-the-world `_rehash` is the single ugliest thing in the distribution. The fix is well-understood; I just haven't done it yet.
+
+**The replication backlog probably should not be a fixed 1MB ring.** The eviction-on-lap policy makes sense in steady state but is brittle during periods of high write load, and a slow replica gets killed for reasons that are not really its fault. The next iteration is a hybrid: the ring stays as the hot path, but a replica that would otherwise be evicted gets promoted to a one-off recovery snapshot instead.
+
+**`io_uring` on Linux.** The event loop abstraction was written so the backend could be swapped, and `epoll` plus careful syscall batching has paid off, but `io_uring` would let me submit reads, writes, and `fdatasync` calls in batches that are currently impossible.
+
+There are smaller things too: a slab allocator for `HashNode` (every node is exactly 16 bytes and they're allocated by the millions, which is the textbook slab case), linking against jemalloc, and a real configuration story so AOF flush intervals, max client count, and backlog size don't require recompilation.
+
+## Thoughts on complexity
+
+For an in-memory key-value store running on a single VPS, large parts of this are over-engineered (like most of my projects). A simpler design with a global mutex, blocking AOF writes, and one replica over a TCP stream would still be useful software, and it would have shipped in a quarter of the time.
+
+The complexity was the point. I did not want to learn how to build a fast key-value store; I wanted to learn how to think about fork semantics, copy-on-write, lock-free file size tracking, syscall batching, and replication state machines well enough to make non-obvious choices and defend them. The benchmark numbers are nice, but the real output is being able to read Redis's source and have a strong opinion about it.
