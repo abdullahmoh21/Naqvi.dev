@@ -11,7 +11,7 @@ tags:
   - redis
 ---
 
-A month ago I sat down to build an in-memory key-value store like Redis, in C, from scratch, with two restrictions: no AI written code, no external dependencies. I wrote about why I wanted to do this [here](/blog/languages-i-was-scared-of).
+A month ago I sat down to build an in-memory key-value store like Redis, in C, from scratch, with two restrictions: no AI written code, no external dependencies. I wrote about why I wanted to do this [here](/blog/fear_of_c).
 
 What I ended up with is a KV store that speaks RESP over plain TCP: single-threaded, non-blocking event loop, a hash table behind GET/SET, a skip list for sorted-set commands like ZADD, and an append-only file that compacts in a forked child process. This post is about what happened when I pointed a benchmark at it, and it has grown as the project has. I'll keep updating it.
 
